@@ -138,8 +138,9 @@ class MBSRec(nn.Module):
         # Combine operations: add positional embedding, then project
         seq = self.feat_projection(seq + pos_emb)
         
-        # Process context (note: in original code this is computed but not directly used)
+        # Process context 
         seq_cxt_emb = self.cxt_projection(seq_cxt)
+        seq += seq_cxt_emb
         
         # Apply dropout and masking in one step
         if is_training:
