@@ -150,6 +150,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', required=True)
     parser.add_argument('--train_dir', required=True)
+    parser.add_argument('--dataset_type', required=True, type=str,
+                        choices=['movie', 'yelp', 'tianchi', 'taobao'])
     parser.add_argument('--batch_size', default=128, type=int)
     parser.add_argument('--lr', default=0.0006, type=float)
     parser.add_argument('--maxlen', default=70, type=int)
@@ -164,6 +166,7 @@ def main():
                         help='Save checkpoint every n epochs (0 to disable)')
     parser.add_argument('--resume', default='', type=str, metavar='PATH',
                         help='Path to checkpoint to resume training from')
+
     
     args = parser.parse_args()
     
@@ -176,9 +179,17 @@ def main():
     
     # Load data
     print("Loading data...")
-    from util import data_partition_movie
-    dataset = data_partition_movie(args.dataset)
-    [train, valid, test, Beh, Beh_w, usernum, itemnum] = dataset
+    if args.dataset_type == 'movie':
+        from util import data_partition_movie
+        dataset = data_partition_movie(args.dataset)
+    elif args.dataset_type in ['taobao', 'tianchi']:
+        from util import data_partition_tmall
+        dataset = data_partition_tmall(args.dataset)
+    elif args.dataset_type == 'yelp':
+        from util import data_partition_yelp
+        dataset = data_partition_yelp(args.dataset)
+
+    [_, _, _, _, _, usernum, itemnum] = dataset
     print("Data loaded.")
     
     # Create model
