@@ -2,9 +2,10 @@ import torch
 import numpy as np
 import argparse
 import time
-
+import os
 
 from model import MBSRec
+from util import load_checkpoint, save_checkpoint
 
 def evaluate_valid(model, dataset, args, device):
     train, valid, test, Beh, Beh_w, usernum, itemnum = dataset
@@ -92,7 +93,14 @@ def train_model(model, dataset, args, device):
     T = 0.0
     t0 = time.time()
     
-    for epoch in range(1, args.num_epochs + 1):
+    # Set starting epoch (for resuming training)
+    start_epoch = 1
+    
+    # Load checkpoint if resuming training
+    if args.resume:
+        start_epoch = load_checkpoint(model, optimizer, args.resume)
+    
+    for epoch in range(start_epoch, args.num_epochs + 1):
         model.train()
         total_loss = 0
         
@@ -120,7 +128,12 @@ def train_model(model, dataset, args, device):
             
             total_loss += loss.item()
         
-        print(f'loss in epoch... {epoch} is {total_loss/num_batch}')
+        avg_loss = total_loss / num_batch
+        print(f'loss in epoch... {epoch} is {avg_loss}')
+        
+        # Save checkpoint if specified
+        if args.checkpoint_interval > 0 and epoch % args.checkpoint_interval == 0:
+            save_checkpoint(model, optimizer, epoch, avg_loss, args)
         
         if epoch % 10 == 0:
             t1 = time.time() - t0
@@ -147,15 +160,23 @@ def main():
     parser.add_argument('--dropout_rate', default=0.4, type=float)
     parser.add_argument('--l2_emb', default=0.0, type=float)
     parser.add_argument('--projection_size', default=8, type=int)
+    parser.add_argument('--checkpoint_interval', default=20, type=int, 
+                        help='Save checkpoint every n epochs (0 to disable)')
+    parser.add_argument('--resume', default='', type=str, metavar='PATH',
+                        help='Path to checkpoint to resume training from')
     
     args = parser.parse_args()
+    
+    # Create train directory if it doesn't exist
+    if not os.path.exists(args.train_dir):
+        os.makedirs(args.train_dir)
     
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # Load data
     print("Loading data...")
-    from util import data_partition_movie  # Need to port from original code
+    from util import data_partition_movie
     dataset = data_partition_movie(args.dataset)
     [train, valid, test, Beh, Beh_w, usernum, itemnum] = dataset
     print("Data loaded.")
@@ -166,8 +187,10 @@ def main():
     # Train model
     train_model(model, dataset, args, device)
     
-    # Save model
-    torch.save(model.state_dict(), f"{args.train_dir}/model.pt")
+    # Save final model
+    final_model_path = f"{args.train_dir}/model.pt"
+    torch.save(model.state_dict(), final_model_path)
+    print(f"Final model saved at {final_model_path}")
 
 if __name__ == '__main__':
     main()
