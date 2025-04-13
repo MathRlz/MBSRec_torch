@@ -1,7 +1,5 @@
 import numpy as np
 from multiprocessing import Process, Queue
-import matplotlib as plt
-
 
 def random_neq(l, r, s):
     t = np.random.randint(l, r)

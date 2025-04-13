@@ -107,19 +107,22 @@ def train_model(model, dataset, args, device):
         for step in range(num_batch):
             u, seq, pos, neg, seq_cxt, pos_cxt, pos_weight, neg_weight, recency = sampler.next_batch()
             
-            # Convert to tensors
+            # Convert to tensors and ensure correct data types
             u = torch.tensor(u, device=device)
             seq = torch.tensor(np.array(seq), device=device)
             pos = torch.tensor(np.array(pos), device=device)
             neg = torch.tensor(np.array(neg), device=device)
+            
+            # Make sure context tensors are float type
             seq_cxt = torch.tensor(np.array(seq_cxt, dtype=np.float32), dtype=torch.float, device=device)
             pos_cxt = torch.tensor(np.array(pos_cxt, dtype=np.float32), dtype=torch.float, device=device)
             pos_weight = torch.tensor(np.array(pos_weight, dtype=np.float32), dtype=torch.float, device=device)
             neg_weight = torch.tensor(np.array(neg_weight, dtype=np.float32), dtype=torch.float, device=device)
             recency = torch.tensor(np.array(recency, dtype=np.float32), dtype=torch.float, device=device)
             
-            # Forward pass
-            auc, loss, _, _ = model(u, seq, seq_cxt, pos, neg, pos_cxt, pos_weight, neg_weight, recency)
+            # Fix argument order to match model's forward method
+            # The model.forward expects: (u, input_seq, pos, neg, seq_cxt, pos_cxt, is_training, pos_weight, neg_weight)
+            loss, auc, _ = model(u, seq, pos, neg, seq_cxt, pos_cxt, True, pos_weight, neg_weight)
             
             # Backward pass
             optimizer.zero_grad()
