@@ -3,6 +3,7 @@ import numpy as np
 import argparse
 import time
 import os
+import csv
 
 from model import MBSRec
 from util import load_checkpoint, save_checkpoint
@@ -75,6 +76,19 @@ def evaluate_valid(model, dataset, args, device):
                 
     return NDCG / valid_user, HT / valid_user
 
+def save_metrics(metrics_dict, filename):
+    """Save metrics to a CSV file with predefined columns"""
+    # Define all possible columns upfront
+    fieldnames = ['epoch', 'loss', 'auc', 'ndcg', 'hr', 'time']
+    
+    file_exists = os.path.isfile(filename)
+    
+    with open(filename, 'a', newline='') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(metrics_dict)
+
 def train_model(model, dataset, args, device):
     from sampler import WarpSampler
     
@@ -90,6 +104,9 @@ def train_model(model, dataset, args, device):
                           maxlen=args.maxlen, 
                           n_workers=3)
     
+    # Setup metrics logging
+    metrics_file = f"{args.train_dir}/training_metrics.csv"
+    
     T = 0.0
     t0 = time.time()
     
@@ -103,6 +120,7 @@ def train_model(model, dataset, args, device):
     for epoch in range(start_epoch, args.num_epochs + 1):
         model.train()
         total_loss = 0
+        total_auc = 0
         
         for step in range(num_batch):
             u, seq, pos, neg, seq_cxt, pos_cxt, pos_weight, neg_weight, recency = sampler.next_batch()
@@ -121,30 +139,45 @@ def train_model(model, dataset, args, device):
             recency = torch.tensor(np.array(recency, dtype=np.float32), dtype=torch.float, device=device)
             
             # Fix argument order to match model's forward method
-            # The model.forward expects: (u, input_seq, pos, neg, seq_cxt, pos_cxt, is_training, pos_weight, neg_weight)
             loss, auc, _ = model(u, seq, pos, neg, seq_cxt, pos_cxt, True, pos_weight, neg_weight)
+            
+            # Track metrics
+            total_loss += loss.item()
+            total_auc += auc.item()
             
             # Backward pass
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            
-            total_loss += loss.item()
         
+        # Calculate average loss and AUC for this epoch
         avg_loss = total_loss / num_batch
-        print(f'loss in epoch... {epoch} is {avg_loss}')
+        avg_auc = total_auc / num_batch
+        
+        # Initialize metrics dictionary with always-collected metrics
+        metrics = {'epoch': epoch, 'loss': avg_loss, 'auc': avg_auc}
+        print(f'loss in epoch... {epoch} is {avg_loss}, auc: {avg_auc:.4f}')
         
         # Save checkpoint if specified
         if args.checkpoint_interval > 0 and epoch % args.checkpoint_interval == 0:
             save_checkpoint(model, optimizer, epoch, avg_loss, args)
         
+        # Evaluate metrics every 10 epochs
         if epoch % 10 == 0:
             t1 = time.time() - t0
             T += t1
             print('Evaluating')
             ndcg, hr = evaluate_valid(model, dataset, args, device)
+            
+            # Add these metrics only when collected (every 10 epochs)
+            metrics.update({'ndcg': ndcg, 'hr': hr, 'time': T})
+            
             print(f'epoch:{epoch}, time: {T}(s), valid (NDCG@10: {ndcg:.4f}, HR@10: {hr:.4f})')
             t0 = time.time()
+        
+        # Save metrics every epoch
+        if (args.log_metrics):
+            save_metrics(metrics, metrics_file)
     
     sampler.close()
     print("Done")
@@ -165,11 +198,12 @@ def main():
     parser.add_argument('--dropout_rate', default=0.4, type=float)
     parser.add_argument('--l2_emb', default=0.0, type=float)
     parser.add_argument('--projection_size', default=8, type=int)
-    parser.add_argument('--checkpoint_interval', default=20, type=int, 
+    parser.add_argument('--checkpoint_interval', default=100, type=int, 
                         help='Save checkpoint every n epochs (0 to disable)')
     parser.add_argument('--resume', default='', type=str, metavar='PATH',
                         help='Path to checkpoint to resume training from')
-
+    parser.add_argument('--log_metrics', default=True,
+                        help='Enable metrics logging to CSV')
     
     args = parser.parse_args()
     
