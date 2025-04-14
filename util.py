@@ -1,5 +1,6 @@
 import torch
 from collections import defaultdict
+import csv
 
 def save_checkpoint(model, optimizer, epoch, loss, args, filename=None):
     """
@@ -235,4 +236,65 @@ def data_partition_yelp(fname):
             user_valid[user].append(last_item)
             user_test[user] = []
             user_test[user].append(last_item)
+    return [user_train, user_valid, user_test, Beh, Beh_w, usernum, itemnum]
+
+def data_partition_anime(fname):
+    usernum = 0
+    itemnum = 0
+    User = defaultdict(list)
+    user_train = {}
+    user_last_indx = {}
+    user_valid = {}
+    user_test = {}
+    Beh = {}
+    Beh_w = {}
+    # assume user/item index starting from 1
+    f = open(fname, 'r')
+    anime_reader = csv.reader(f, delimiter=';')
+    next(anime_reader) # Skip the header row
+    for row in anime_reader:
+        u, i, b = row 
+        u = int(u)
+        i = int(i)
+        b = int(b)
+        usernum = max(u, usernum)
+        itemnum = max(i, itemnum)
+
+        Beh[(u,i)] = [0]*11
+        Beh[(u,i)][b] = 1
+        Beh_w[(u,i)] = (float)(b)/10.0
+
+        # Rating over 7 is considered positive
+        if b > 7:
+            last_pos_idx = len(User[u])
+            user_last_indx[u] = last_pos_idx
+
+        User[u].append(i)
+
+    for user in User:
+        Beh[(user,0)] = [0] * 11
+        Beh_w[(user,0)] = 0
+        nfeedback = len(User[user])
+        if nfeedback < 3:
+            user_train[user] = User[user]
+            user_valid[user] = []
+            user_test[user] = []
+        else:
+            # Check if user has any positive interactions
+            if user in user_last_indx:
+                last_item_indx = user_last_indx[user]
+                last_item = User[user][last_item_indx]
+                items_list = User[user]
+                del items_list[last_item_indx]
+
+                user_train[user] = items_list
+                user_valid[user] = []
+                user_valid[user].append(last_item)
+                user_test[user] = []
+                user_test[user].append(last_item)
+            else:
+                # Handle users with no positive interactions
+                user_train[user] = User[user]
+                user_valid[user] = []
+                user_test[user] = []
     return [user_train, user_valid, user_test, Beh, Beh_w, usernum, itemnum]

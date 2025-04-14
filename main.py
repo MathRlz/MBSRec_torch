@@ -16,10 +16,14 @@ def evaluate_valid(model, dataset, args, device):
     HT = 0.0
     valid_user = 0.0
     
+    # Only use users that exist in both train and valid sets
     if usernum > 10000:
-        users = list(range(1, 10001))  # Sample users like in original
+        # Get intersection of keys, limited to first 10000
+        potential_users = set(train.keys()) & set(valid.keys())
+        users = list(potential_users)[:10000]
     else:
-        users = range(1, usernum + 1)
+        # Get all users that exist in both train and valid
+        users = list(set(train.keys()) & set(valid.keys()))
     
     with torch.no_grad():
         for u in users:
@@ -36,7 +40,8 @@ def evaluate_valid(model, dataset, args, device):
                     
             seq_cxt = []
             for i in seq:
-                seq_cxt.append(Beh.get((u, i), [0, 0, 0, 0]))
+                # Use args.context_size to create correct size context vector
+                seq_cxt.append(Beh.get((u, i), [0] * args.context_size))
             seq_cxt = np.array(seq_cxt)
             
             rated = set(train[u])
@@ -44,7 +49,8 @@ def evaluate_valid(model, dataset, args, device):
             item_idx = [valid[u][0]]
             
             testitemscxt = []
-            testitemscxt.append(Beh.get((u, valid[u][0]), [0, 0, 0, 0]))
+            # Use args.context_size here too
+            testitemscxt.append(Beh.get((u, valid[u][0]), [0] * args.context_size))
             
             # Sample negative items
             for _ in range(99):
@@ -52,7 +58,8 @@ def evaluate_valid(model, dataset, args, device):
                 while t in rated:
                     t = np.random.randint(1, itemnum + 1)
                 item_idx.append(t)
-                testitemscxt.append(Beh.get((u, valid[u][0]), [0, 0, 0, 0]))
+                # Use args.context_size here too
+                testitemscxt.append(Beh.get((u, t), [0] * args.context_size))
                 
             # Convert to tensors
             u_tensor = torch.tensor(np.array([u]), device=device)
@@ -187,7 +194,7 @@ def main():
     parser.add_argument('--dataset', required=True)
     parser.add_argument('--train_dir', required=True)
     parser.add_argument('--dataset_type', required=True, type=str,
-                        choices=['movie', 'yelp', 'tianchi', 'taobao'])
+                        choices=['movie', 'yelp', 'tianchi', 'taobao', 'anime'])
     parser.add_argument('--batch_size', default=128, type=int)
     parser.add_argument('--lr', default=0.0006, type=float)
     parser.add_argument('--maxlen', default=70, type=int)
@@ -204,6 +211,8 @@ def main():
                         help='Path to checkpoint to resume training from')
     parser.add_argument('--log_metrics', default=True,
                         help='Enable metrics logging to CSV')
+    parser.add_argument('--context_size', default=4, type=int,
+                        help='Size of context for each item')
     
     args = parser.parse_args()
     
@@ -225,6 +234,10 @@ def main():
     elif args.dataset_type == 'yelp':
         from util import data_partition_yelp
         dataset = data_partition_yelp(args.dataset)
+    elif args.dataset_type == 'anime':
+        from util import data_partition_anime
+        dataset = data_partition_anime(args.dataset)
+        args.context_size = 11
 
     [_, _, _, _, _, usernum, itemnum] = dataset
     print("Data loaded.")

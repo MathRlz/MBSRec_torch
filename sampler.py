@@ -9,11 +9,15 @@ def random_neq(l, r, s):
 
 
 def sample_function(user_train, Beh, Beh_w, usernum, itemnum, batch_size, maxlen, result_queue, SEED):
+    # Precompute valid users (users with >1 item in training set)
+    valid_users = [u for u in user_train if len(user_train[u]) > 1]
+    if not valid_users:
+        raise ValueError("No valid users found with more than 1 interaction")
+    
     def sample():
         recency_alpha = 0.5
-        user = np.random.randint(1, usernum + 1)
-        while len(user_train[user]) <= 1: user = np.random.randint(1, usernum + 1)
-
+        user = np.random.choice(valid_users)
+        
         seq = np.zeros([maxlen], dtype=np.int32)
         pos = np.zeros([maxlen], dtype=np.int32)
         neg = np.zeros([maxlen], dtype=np.int32)

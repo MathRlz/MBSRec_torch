@@ -49,7 +49,7 @@ class TransformerBlock(nn.Module):
 class ItemContextProcessor(nn.Module):
     """Processes items and their context features"""
     
-    def __init__(self, item_vocab_size, hidden_size, context_size=4):
+    def __init__(self, item_vocab_size, hidden_size, context_size):
         super().__init__()
         self.item_emb = nn.Embedding(item_vocab_size + 1, hidden_size, padding_idx=0)
         self.context_emb = nn.Linear(context_size, hidden_size)
@@ -77,7 +77,7 @@ class MBSRec(nn.Module):
         self.item_processor = ItemContextProcessor(
             item_vocab_size=itemnum,
             hidden_size=args.hidden_units,
-            context_size=4  # Assuming context size is 4
+            context_size=args.context_size
         )
         
         # Positional encoding
@@ -139,7 +139,7 @@ class MBSRec(nn.Module):
         # Reshape target items
         pos = pos.view(batch_size * self.args.maxlen)
         neg = neg.view(batch_size * self.args.maxlen)
-        pos_cxt = pos_cxt.view(batch_size * self.args.maxlen, 4)
+        pos_cxt = pos_cxt.view(batch_size * self.args.maxlen, self.args.context_size)
         
         # Set default weights if not provided
         if pos_weight is not None:
