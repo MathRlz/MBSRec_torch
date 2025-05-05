@@ -15,7 +15,8 @@ class TransformerBlock(nn.Module):
         )
         self.feed_forward = nn.Sequential(
             nn.Linear(hidden_size, hidden_size),
-            nn.ReLU(),
+            nn.GELU(),
+            nn.Dropout(dropout_rate),
             nn.Linear(hidden_size, hidden_size)
         )
         self.norm1 = nn.LayerNorm(hidden_size, eps=1e-8)
