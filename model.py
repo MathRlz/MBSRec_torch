@@ -182,7 +182,7 @@ class MBSRec(nn.Module):
         seq_emb = seq[:, -1]
         
         # Process test items
-        test_item_emb = self.item_processor(test_item, test_item_cxt)
+        test_item_emb = self.item_processor(test_item, test_item_cxt) # [batch_size, num_candidates, hidden_dim]
         
         # Expand seq_emb to [batch_size, 1, hidden_dim] for broadcasting
         seq_emb = seq_emb.unsqueeze(1)  # [batch_size, 1, hidden_dim]

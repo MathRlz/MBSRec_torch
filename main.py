@@ -6,6 +6,7 @@ import os
 import csv
 from torch.utils.data import DataLoader
 from dataset import MBSRecDataset, EvalDataset
+from tqdm import tqdm
 
 from model import MBSRec
 from util import load_checkpoint, save_checkpoint
@@ -89,13 +90,12 @@ def train_model(model, dataset, args, device):
     if args.resume:
         start_epoch = load_checkpoint(model, optimizer, args.resume)
 
-    for epoch in range(start_epoch, args.num_epochs + 1):
+    for epoch in tqdm(range(start_epoch, args.num_epochs + 1), desc="Training Epochs", unit="epoch"):
         model.train()
         total_loss = 0
         total_auc = 0
 
         for batch in train_loader:
-            # Each batch is already a tuple of tensors
             batch = [x.to(device, non_blocking=True) for x in batch]
             u, seq, pos, neg, seq_cxt, pos_cxt, pos_weight, neg_weight, recency = batch
 
@@ -110,32 +110,31 @@ def train_model(model, dataset, args, device):
         # Calculate average loss and AUC for this epoch
         avg_loss = total_loss / num_batch
         avg_auc = total_auc / num_batch
-        
+
+        # Calculate and accumulate time for this epoch
+        t1 = time.time() - t0
+        T += t1
+
         # Initialize metrics dictionary with always-collected metrics
-        metrics = {'epoch': epoch, 'loss': avg_loss, 'auc': avg_auc}
-        print(f'loss in epoch... {epoch} is {avg_loss}, auc: {avg_auc:.4f}')
-        
+        metrics = {'epoch': epoch, 'loss': avg_loss, 'auc': avg_auc, 'time': T}
+
         # Save checkpoint if specified
         if args.checkpoint_interval > 0 and epoch % args.checkpoint_interval == 0:
             save_checkpoint(model, optimizer, epoch, avg_loss, args)
-        
+
         # Evaluate metrics every 10 epochs
         if epoch % 10 == 0:
-            t1 = time.time() - t0
-            T += t1
             print('Evaluating')
             ndcg, hr = evaluate_valid_loader(model, valid_loader, device)
-            
-            # Add these metrics only when collected (every 10 epochs)
-            metrics.update({'ndcg': ndcg, 'hr': hr, 'time': T})
-            
-            print(f'epoch:{epoch}, time: {T}(s), valid (NDCG@10: {ndcg:.4f}, HR@10: {hr:.4f})')
-            t0 = time.time()
+            metrics.update({'ndcg': ndcg, 'hr': hr})
+            print(f'epoch:{epoch}, loss: {avg_loss}, auc: {avg_auc:.4f}, time: {T}(s), valid (NDCG@10: {ndcg:.4f}, HR@10: {hr:.4f})')
 
         # Save metrics every epoch
-        if (args.log_metrics):
+        if args.log_metrics:
             save_metrics(metrics, metrics_file)
-    
+
+        t0 = time.time()  # Reset timer for next epoch
+
     print("Done")
 
 def main():
