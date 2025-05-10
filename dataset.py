@@ -2,6 +2,58 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+class EvalDataset(Dataset):
+    def __init__(self, user_eval, user_train, Beh, itemnum, maxlen, context_size):
+        """
+        user_eval: dict of {user: [eval_item]} (validation or test)
+        user_train: dict of {user: [train_items]}
+        Beh: context dict
+        itemnum: total number of items
+        maxlen: sequence length
+        context_size: context vector size
+        """
+        # Only users with both train and eval data
+        self.users = [u for u in user_eval if len(user_eval[u]) > 0 and len(user_train.get(u, [])) > 0]
+        self.user_eval = user_eval
+        self.user_train = user_train
+        self.Beh = Beh
+        self.itemnum = itemnum
+        self.maxlen = maxlen
+        self.context_size = context_size
+
+    def __len__(self):
+        return len(self.users)
+
+    def __getitem__(self, idx):
+        u = self.users[idx]
+        seq = np.zeros([self.maxlen], dtype=np.int32)
+        idx_ = self.maxlen - 1
+        for i in reversed(self.user_train[u]):
+            seq[idx_] = i
+            idx_ -= 1
+            if idx_ == -1:
+                break
+
+        seq_cxt = np.array([self.Beh.get((u, i), [0] * self.context_size) for i in seq], dtype=np.float32)
+        rated = set(self.user_train[u])
+        rated.add(0)
+        pos_item = self.user_eval[u][0]
+        item_idx = [pos_item]
+        testitemscxt = [self.Beh.get((u, pos_item), [0] * self.context_size)]
+        for _ in range(99):
+            t = np.random.randint(1, self.itemnum + 1)
+            while t in rated or t in item_idx:
+                t = np.random.randint(1, self.itemnum + 1)
+            item_idx.append(t)
+            testitemscxt.append(self.Beh.get((u, t), [0] * self.context_size))
+        return (
+            torch.tensor(u, dtype=torch.long),
+            torch.tensor(seq, dtype=torch.long),
+            torch.tensor(item_idx, dtype=torch.long),
+            torch.tensor(seq_cxt, dtype=torch.float),
+            torch.tensor(np.array(testitemscxt, dtype=np.float32), dtype=torch.float)
+        )
+
 class MBSRecDataset(Dataset):
     def __init__(self, user_train, Beh, Beh_w, usernum, itemnum, maxlen, context_size):
         self.user_train = user_train

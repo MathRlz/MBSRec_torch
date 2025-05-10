@@ -184,7 +184,10 @@ class MBSRec(nn.Module):
         # Process test items
         test_item_emb = self.item_processor(test_item, test_item_cxt)
         
-        # Calculate test logits
-        test_logits = torch.matmul(seq_emb, test_item_emb.transpose(0, 1))
+        # Expand seq_emb to [batch_size, 1, hidden_dim] for broadcasting
+        seq_emb = seq_emb.unsqueeze(1)  # [batch_size, 1, hidden_dim]
+
+        # Compute dot product for each user and their 100 candidates
+        test_logits = (seq_emb * test_item_emb).sum(-1)  # [batch_size, 100]
         
         return test_logits

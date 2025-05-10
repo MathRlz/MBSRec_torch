@@ -5,84 +5,28 @@ import time
 import os
 import csv
 from torch.utils.data import DataLoader
-from dataset import MBSRecDataset
+from dataset import MBSRecDataset, EvalDataset
 
 from model import MBSRec
 from util import load_checkpoint, save_checkpoint
 
-def evaluate_valid(model, dataset, args, device):
-    train, valid, test, Beh, Beh_w, usernum, itemnum = dataset
-    
+def evaluate_valid_loader(model, valid_loader, device):
     model.eval()
     NDCG = 0.0
     HT = 0.0
     valid_user = 0.0
-    
-    # Only use users that exist in both train and valid sets
-    if usernum > 10000:
-        # Get intersection of keys, limited to first 10000
-        potential_users = set(train.keys()) & set(valid.keys())
-        users = list(potential_users)[:10000]
-    else:
-        # Get all users that exist in both train and valid
-        users = list(set(train.keys()) & set(valid.keys()))
-    
+
     with torch.no_grad():
-        for u in users:
-            if len(train[u]) < 1 or len(valid[u]) < 1:
-                continue
-                
-            seq = np.zeros([args.maxlen], dtype=np.int32)
-            idx = args.maxlen - 1
-            for i in reversed(train[u]):
-                seq[idx] = i
-                idx -= 1
-                if idx == -1:
-                    break
-                    
-            seq_cxt = []
-            for i in seq:
-                # Use args.context_size to create correct size context vector
-                seq_cxt.append(Beh.get((u, i), [0] * args.context_size))
-            seq_cxt = np.array(seq_cxt)
-            
-            rated = set(train[u])
-            rated.add(0)
-            item_idx = [valid[u][0]]
-            
-            testitemscxt = []
-            # Use args.context_size here too
-            testitemscxt.append(Beh.get((u, valid[u][0]), [0] * args.context_size))
-            
-            # Sample negative items
-            for _ in range(99):
-                t = np.random.randint(1, itemnum + 1)
-                while t in rated:
-                    t = np.random.randint(1, itemnum + 1)
-                item_idx.append(t)
-                # Use args.context_size here too
-                testitemscxt.append(Beh.get((u, t), [0] * args.context_size))
-                
-            # Convert to tensors
-            u_tensor = torch.tensor(np.array([u]), device=device)
-            seq_tensor = torch.tensor(np.array([seq]), device=device)
-            item_idx_tensor = torch.tensor(item_idx, device=device)
-            seq_cxt_tensor = torch.tensor(np.array([seq_cxt], dtype=np.float32), dtype=torch.float, device=device)
-            testitemscxt_tensor = torch.tensor(np.array(testitemscxt, dtype=np.float32), dtype=torch.float, device=device)
-            
-            # Get predictions
-            predictions = -model.predict(u_tensor, seq_tensor, item_idx_tensor, seq_cxt_tensor, testitemscxt_tensor)
-            predictions = predictions[0].cpu().numpy()
-            
-            # Calculate metrics
-            rank = predictions.argsort().argsort()[0]
-            
-            valid_user += 1
-            
-            if rank < 10:
-                NDCG += 1 / np.log2(rank + 2)
-                HT += 1
-                
+        for batch in valid_loader:
+            u, seq, item_idx, seq_cxt, testitemscxt = [x.to(device) for x in batch]
+            predictions = -model.predict(u, seq, item_idx, seq_cxt, testitemscxt)
+            predictions = predictions.cpu().numpy()
+            for i in range(predictions.shape[0]):
+                rank = predictions[i].argsort().argsort()[0]
+                valid_user += 1
+                if rank < 10:
+                    NDCG += 1 / np.log2(rank + 2)
+                    HT += 1
     return NDCG / valid_user, HT / valid_user
 
 def evaluate_test(model, dataset, args, device):
@@ -178,6 +122,9 @@ def train_model(model, dataset, args, device):
     )
     num_batch = len(train_loader)
 
+    valid_dataset = EvalDataset(valid, train, Beh, itemnum, args.maxlen, args.context_size)
+    valid_loader = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=False, num_workers=2, pin_memory=True)
+
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.98))
     metrics_file = f"{args.train_dir}/training_metrics.csv"
     T = 0.0
@@ -221,7 +168,7 @@ def train_model(model, dataset, args, device):
             t1 = time.time() - t0
             T += t1
             print('Evaluating')
-            ndcg, hr = evaluate_valid(model, dataset, args, device)
+            ndcg, hr = evaluate_valid_loader(model, valid_loader, device)
             
             # Add these metrics only when collected (every 10 epochs)
             metrics.update({'ndcg': ndcg, 'hr': hr, 'time': T})
