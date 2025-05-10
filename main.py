@@ -4,6 +4,8 @@ import argparse
 import time
 import os
 import csv
+from torch.utils.data import DataLoader
+from dataset import MBSRecDataset
 
 from model import MBSRec
 from util import load_checkpoint, save_checkpoint
@@ -83,6 +85,73 @@ def evaluate_valid(model, dataset, args, device):
                 
     return NDCG / valid_user, HT / valid_user
 
+def evaluate_test(model, dataset, args, device):
+    train, valid, test, Beh, Beh_w, usernum, itemnum = dataset
+
+    model.eval()
+    NDCG = 0.0
+    HT = 0.0
+    test_user = 0.0
+
+    # Only evaluate users that have test data
+    if usernum > 10000:
+        users = list(test.keys())[:10000]
+    else:
+        users = list(test.keys())
+
+    with torch.no_grad():
+        for u in users:
+            # Skip users with no history or no test item
+            if len(train.get(u, [])) < 1 or len(test[u]) < 1:
+                continue
+
+            # Build sequence from user's history (train)
+            seq = np.zeros([args.maxlen], dtype=np.int32)
+            idx = args.maxlen - 1
+            for i in reversed(train[u]):
+                seq[idx] = i
+                idx -= 1
+                if idx == -1:
+                    break
+
+            seq_cxt = []
+            for i in seq:
+                seq_cxt.append(Beh.get((u, i), [0] * args.context_size))
+            seq_cxt = np.array(seq_cxt)
+
+            # The positive test item
+            item_idx = [test[u][0]]
+            testitemscxt = [Beh.get((u, test[u][0]), [0] * args.context_size)]
+
+            # Sample 99 negative items not in user's history
+            rated = set(train[u])
+            rated.add(0)
+            for _ in range(99):
+                t = np.random.randint(1, itemnum + 1)
+                while t in rated or t in item_idx:
+                    t = np.random.randint(1, itemnum + 1)
+                item_idx.append(t)
+                testitemscxt.append(Beh.get((u, t), [0] * args.context_size))
+
+            # Convert to tensors
+            u_tensor = torch.tensor(np.array([u]), device=device)
+            seq_tensor = torch.tensor(np.array([seq]), device=device)
+            item_idx_tensor = torch.tensor(item_idx, device=device)
+            seq_cxt_tensor = torch.tensor(np.array([seq_cxt], dtype=np.float32), dtype=torch.float, device=device)
+            testitemscxt_tensor = torch.tensor(np.array(testitemscxt, dtype=np.float32), dtype=torch.float, device=device)
+
+            # Predict and evaluate
+            predictions = -model.predict(u_tensor, seq_tensor, item_idx_tensor, seq_cxt_tensor, testitemscxt_tensor)
+            predictions = predictions[0].cpu().numpy()
+            rank = predictions.argsort().argsort()[0]
+
+            test_user += 1
+            if rank < 10:
+                NDCG += 1 / np.log2(rank + 2)
+                HT += 1
+
+    return NDCG / test_user, HT / test_user
+
 def save_metrics(metrics_dict, filename):
     """Save metrics to a CSV file with predefined columns"""
     # Define all possible columns upfront
@@ -97,66 +166,44 @@ def save_metrics(metrics_dict, filename):
         writer.writerow(metrics_dict)
 
 def train_model(model, dataset, args, device):
-    from sampler import WarpSampler
-    
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.98))
-    
-    # Create data sampler
     train, valid, test, Beh, Beh_w, usernum, itemnum = dataset
-    num_batch = len(train) // args.batch_size
-    
-    # Fix: Pass Beh and Beh_w to the WarpSampler constructor
-    sampler = WarpSampler(train, Beh, Beh_w, usernum, itemnum, 
-                          batch_size=args.batch_size, 
-                          maxlen=args.maxlen, 
-                          n_workers=3)
-    
-    # Setup metrics logging
+
+    train_dataset = MBSRecDataset(train, Beh, Beh_w, usernum, itemnum, args.maxlen, args.context_size)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=5,         # Tune for your CPU
+        pin_memory=True
+    )
+    num_batch = len(train_loader)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.98))
     metrics_file = f"{args.train_dir}/training_metrics.csv"
-    
     T = 0.0
     t0 = time.time()
-    
-    # Set starting epoch (for resuming training)
     start_epoch = 1
-    
-    # Load checkpoint if resuming training
     if args.resume:
         start_epoch = load_checkpoint(model, optimizer, args.resume)
-    
+
     for epoch in range(start_epoch, args.num_epochs + 1):
         model.train()
         total_loss = 0
         total_auc = 0
-        
-        for step in range(num_batch):
-            u, seq, pos, neg, seq_cxt, pos_cxt, pos_weight, neg_weight, recency = sampler.next_batch()
-            
-            # Convert to tensors and ensure correct data types
-            u = torch.tensor(u, device=device)
-            seq = torch.tensor(np.array(seq), device=device)
-            pos = torch.tensor(np.array(pos), device=device)
-            neg = torch.tensor(np.array(neg), device=device)
-            
-            # Make sure context tensors are float type
-            seq_cxt = torch.tensor(np.array(seq_cxt, dtype=np.float32), dtype=torch.float, device=device)
-            pos_cxt = torch.tensor(np.array(pos_cxt, dtype=np.float32), dtype=torch.float, device=device)
-            pos_weight = torch.tensor(np.array(pos_weight, dtype=np.float32), dtype=torch.float, device=device)
-            neg_weight = torch.tensor(np.array(neg_weight, dtype=np.float32), dtype=torch.float, device=device)
-            recency = torch.tensor(np.array(recency, dtype=np.float32), dtype=torch.float, device=device)
-            
-            # Fix argument order to match model's forward method
+
+        for batch in train_loader:
+            # Each batch is already a tuple of tensors
+            batch = [x.to(device, non_blocking=True) for x in batch]
+            u, seq, pos, neg, seq_cxt, pos_cxt, pos_weight, neg_weight, recency = batch
+
             loss, auc, _ = model(u, seq, pos, neg, seq_cxt, pos_cxt, True, pos_weight, neg_weight)
-            
-            # Track metrics
             total_loss += loss.item()
             total_auc += auc.item()
-            
-            # Backward pass
+
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-        
+
         # Calculate average loss and AUC for this epoch
         avg_loss = total_loss / num_batch
         avg_auc = total_auc / num_batch
@@ -186,7 +233,6 @@ def train_model(model, dataset, args, device):
         if (args.log_metrics):
             save_metrics(metrics, metrics_file)
     
-    sampler.close()
     print("Done")
 
 def main():
@@ -195,7 +241,7 @@ def main():
     parser.add_argument('--train_dir', required=True)
     parser.add_argument('--dataset_type', required=True, type=str,
                         choices=['movie', 'yelp', 'tianchi', 'taobao', 'anime'])
-    parser.add_argument('--batch_size', default=128, type=int)
+    parser.add_argument('--batch_size', default=256, type=int)
     parser.add_argument('--lr', default=0.0006, type=float)
     parser.add_argument('--maxlen', default=70, type=int)
     parser.add_argument('--hidden_units', default=70, type=int)
@@ -222,6 +268,10 @@ def main():
     
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    print(f"Using device: {device}")
+    print(f"Device name : {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}")
+    print(f"Arguments: {args}")
     
     # Load data
     print("Loading data...")
