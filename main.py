@@ -31,69 +31,25 @@ def evaluate_valid_loader(model, valid_loader, device):
 
 def evaluate_test(model, dataset, args, device):
     train, valid, test, Beh, Beh_w, usernum, itemnum = dataset
+    test_dataset = EvalDataset(test, train, Beh, itemnum, args.maxlen, args.context_size)
+    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=2, pin_memory=True)
 
     model.eval()
     NDCG = 0.0
     HT = 0.0
     test_user = 0.0
 
-    # Only evaluate users that have test data
-    if usernum > 10000:
-        users = list(test.keys())[:10000]
-    else:
-        users = list(test.keys())
-
     with torch.no_grad():
-        for u in users:
-            # Skip users with no history or no test item
-            if len(train.get(u, [])) < 1 or len(test[u]) < 1:
-                continue
-
-            # Build sequence from user's history (train)
-            seq = np.zeros([args.maxlen], dtype=np.int32)
-            idx = args.maxlen - 1
-            for i in reversed(train[u]):
-                seq[idx] = i
-                idx -= 1
-                if idx == -1:
-                    break
-
-            seq_cxt = []
-            for i in seq:
-                seq_cxt.append(Beh.get((u, i), [0] * args.context_size))
-            seq_cxt = np.array(seq_cxt)
-
-            # The positive test item
-            item_idx = [test[u][0]]
-            testitemscxt = [Beh.get((u, test[u][0]), [0] * args.context_size)]
-
-            # Sample 99 negative items not in user's history
-            rated = set(train[u])
-            rated.add(0)
-            for _ in range(99):
-                t = np.random.randint(1, itemnum + 1)
-                while t in rated or t in item_idx:
-                    t = np.random.randint(1, itemnum + 1)
-                item_idx.append(t)
-                testitemscxt.append(Beh.get((u, t), [0] * args.context_size))
-
-            # Convert to tensors
-            u_tensor = torch.tensor(np.array([u]), device=device)
-            seq_tensor = torch.tensor(np.array([seq]), device=device)
-            item_idx_tensor = torch.tensor(item_idx, device=device)
-            seq_cxt_tensor = torch.tensor(np.array([seq_cxt], dtype=np.float32), dtype=torch.float, device=device)
-            testitemscxt_tensor = torch.tensor(np.array(testitemscxt, dtype=np.float32), dtype=torch.float, device=device)
-
-            # Predict and evaluate
-            predictions = -model.predict(u_tensor, seq_tensor, item_idx_tensor, seq_cxt_tensor, testitemscxt_tensor)
-            predictions = predictions[0].cpu().numpy()
-            rank = predictions.argsort().argsort()[0]
-
-            test_user += 1
-            if rank < 10:
-                NDCG += 1 / np.log2(rank + 2)
-                HT += 1
-
+        for batch in test_loader:
+            u, seq, item_idx, seq_cxt, testitemscxt = [x.to(device) for x in batch]
+            predictions = -model.predict(u, seq, item_idx, seq_cxt, testitemscxt)
+            predictions = predictions.cpu().numpy()
+            for i in range(predictions.shape[0]):
+                rank = predictions[i].argsort().argsort()[0]
+                test_user += 1
+                if rank < 10:
+                    NDCG += 1 / np.log2(rank + 2)
+                    HT += 1
     return NDCG / test_user, HT / test_user
 
 def save_metrics(metrics_dict, filename):
@@ -175,7 +131,7 @@ def train_model(model, dataset, args, device):
             
             print(f'epoch:{epoch}, time: {T}(s), valid (NDCG@10: {ndcg:.4f}, HR@10: {hr:.4f})')
             t0 = time.time()
-        
+
         # Save metrics every epoch
         if (args.log_metrics):
             save_metrics(metrics, metrics_file)
