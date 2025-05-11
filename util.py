@@ -2,54 +2,54 @@ import torch
 from collections import defaultdict
 import csv
 
-def save_checkpoint(model, optimizer, epoch, loss, args, filename=None):
+def save_checkpoint(model, optimizer, scheduler, epoch, avg_loss, args, best_ndcg, epochs_no_improve):
     """
     Save model and optimizer state to a checkpoint file.
     
     Args:
         model: The model to save
         optimizer: The optimizer to save
+        scheduler: The scheduler to save
         epoch: Current epoch number
-        loss: Current loss value
+        avg_loss: Current average loss value
         args: Program arguments
-        filename: Optional specific filename, otherwise uses epoch number
+        best_ndcg: Current best NDCG value
+        epochs_no_improve: Number of epochs with no improvement
     """
-    if filename is None:
-        filename = f"{args.train_dir}/checkpoint_epoch{epoch}.pt"
-    
-    torch.save({
-        'epoch': epoch,
+    checkpoint = {
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
-        'loss': loss,
-    }, filename)
+        'scheduler_state_dict': scheduler.state_dict(),
+        'epoch': epoch,
+        'avg_loss': avg_loss,
+        'best_ndcg': best_ndcg,
+        'epochs_no_improve': epochs_no_improve,
+    }
+    torch.save(checkpoint, f"{args.train_dir}/checkpoint.pt")
     
-    print(f"Checkpoint saved at {filename}")
+    print(f"Checkpoint saved at {args.train_dir}/checkpoint.pt")
 
-def load_checkpoint(model, optimizer, checkpoint_path):
+def load_checkpoint(model, optimizer, scheduler, resume_path):
     """
     Load model and optimizer state from a checkpoint file.
     
     Args:
         model: The model to load state into
         optimizer: The optimizer to load state into
-        checkpoint_path: Path to the checkpoint file
+        scheduler: The scheduler to load state into
+        resume_path: Path to the checkpoint file
         
     Returns:
         start_epoch: The epoch to resume from
     """
-    if not os.path.isfile(checkpoint_path):
-        print(f"No checkpoint found at '{checkpoint_path}'")
-        return 1
-        
-    print(f"Loading checkpoint '{checkpoint_path}'")
-    checkpoint = torch.load(checkpoint_path)
+    checkpoint = torch.load(resume_path)
     model.load_state_dict(checkpoint['model_state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    start_epoch = checkpoint['epoch'] + 1
-    print(f"Loaded checkpoint '{checkpoint_path}' (epoch {checkpoint['epoch']})")
-    
-    return start_epoch
+    scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+    epoch = checkpoint['epoch'] + 1
+    best_ndcg = checkpoint.get('best_ndcg', -float('inf'))
+    epochs_no_improve = checkpoint.get('epochs_no_improve', 0)
+    return epoch, best_ndcg, epochs_no_improve
 
 def data_partition_movie(fname):
     usernum = 0

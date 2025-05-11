@@ -126,16 +126,15 @@ def train_model(model, dataset, args, device):
     valid_loader = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=False, num_workers=2, pin_memory=True)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.98))
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=200, gamma=0.5)
     metrics_file = f"{args.train_dir}/training_metrics.csv"
     T = 0.0
     t0 = time.time()
     start_epoch = 1
-    if args.resume:
-        start_epoch = load_checkpoint(model, optimizer, args.resume)
-
-    # Early stopping variables
     best_ndcg = -float('inf')
     epochs_no_improve = 0
+    if args.resume:
+        start_epoch, best_ndcg, epochs_no_improve = load_checkpoint(model, optimizer, scheduler, args.resume)
 
     for epoch in tqdm(range(start_epoch, args.num_epochs + 1), desc="Training Epochs", unit="epoch"):
         model.train()
@@ -163,7 +162,7 @@ def train_model(model, dataset, args, device):
         metrics = {'epoch': epoch, 'loss': avg_loss, 'auc': avg_auc, 'time': T}
 
         if args.checkpoint_interval > 0 and epoch % args.checkpoint_interval == 0:
-            save_checkpoint(model, optimizer, epoch, avg_loss, args)
+            save_checkpoint(model, optimizer, scheduler, epoch, avg_loss, args, best_ndcg, epochs_no_improve)
 
         # Early stopping check every 10 epochs
         if epoch % 10 == 0:
@@ -188,6 +187,8 @@ def train_model(model, dataset, args, device):
         if args.log_metrics:
             save_metrics(metrics, metrics_file)
 
+        scheduler.step() 
+
         t0 = time.time()
 
     print("Done")
@@ -209,7 +210,9 @@ def main():
     torch.save(model.state_dict(), final_model_path)
     print(f"Final model saved at {final_model_path}")
 
-    ndcg, hr = evaluate_test_loader(model, dataset[2], device)
+    test_dataset = EvalDataset(dataset[2], dataset[0], dataset[3], itemnum, args.maxlen, args.context_size)
+    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=2, pin_memory=True)
+    ndcg, hr = evaluate_test_loader(model, test_loader, device)
     print(f"Test NDCG@10: {ndcg:.4f}, HR@10: {hr:.4f}")
 
 if __name__ == '__main__':
