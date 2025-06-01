@@ -232,7 +232,12 @@ def main():
     else:
         logging.warning("Best model not found, using final model for testing")
 
-    test_dataset = EvalDataset(dataset[2], dataset[0], dataset[3], itemnum, args.maxlen, args.context_size)
+    # For testing, create dataset with train+valid as sequence
+    train_plus_valid = {}
+    for user in dataset[0]:
+        train_plus_valid[user] = dataset[0][user] + dataset[1].get(user, [])
+    
+    test_dataset = EvalDataset(dataset[2], train_plus_valid, dataset[3], itemnum, args.maxlen, args.context_size)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=2, pin_memory=True)
     ndcg, hr = evaluate_test_loader(model, test_loader, device)
     logging.info(f"Test NDCG@10: {ndcg:.4f}, HR@10: {hr:.4f}")
