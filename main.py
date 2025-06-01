@@ -4,6 +4,7 @@ import argparse
 import time
 import os
 import csv
+import logging
 from torch.utils.data import DataLoader
 from dataset import MBSRecDataset, EvalDataset
 from tqdm import tqdm
@@ -37,16 +38,28 @@ def parse_args():
                         help='Enable metrics logging to CSV')
     parser.add_argument('--context_size', default=4, type=int,
                         help='Size of context for each item')
+    parser.add_argument('--log_to_file', action='store_true', help='Enable logging to log.txt in train_dir')
     return parser.parse_args()
+
+def setup_logging(log_to_file, train_dir):
+    handlers = [logging.StreamHandler()]
+    if log_to_file:
+        log_path = os.path.join(train_dir, 'log.txt')
+        handlers.append(logging.FileHandler(log_path, mode='w'))
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s %(levelname)s: %(message)s',
+        handlers=handlers
+    )
 
 def get_device():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-    print(f"Device name : {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}")
+    logging.info(f"Using device: {device}")
+    logging.info(f"Device name : {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}")
     return device
 
 def load_data(args):
-    print("Loading data...")
+    logging.info("Loading data...")
     if args.dataset_type == 'movie':
         from util import data_partition_movie
         dataset = data_partition_movie(args.dataset)
@@ -60,7 +73,7 @@ def load_data(args):
         from util import data_partition_anime
         dataset = data_partition_anime(args.dataset)
         args.context_size = 11
-    print("Data loaded.")
+    logging.info("Data loaded.")
     return dataset
 
 def save_metrics(metrics_dict, filename):
@@ -166,10 +179,10 @@ def train_model(model, dataset, args, device):
 
         # Early stopping check every 10 epochs
         if epoch % 10 == 0:
-            print('Evaluating')
+            logging.info('Evaluating')
             ndcg, hr = evaluate_valid_loader(model, valid_loader, device)
             metrics.update({'ndcg': ndcg, 'hr': hr})
-            print(f'epoch:{epoch}, loss: {avg_loss}, auc: {avg_auc:.4f}, time: {T}(s), valid (NDCG@10: {ndcg:.4f}, HR@10: {hr:.4f})')
+            logging.info(f'epoch:{epoch}, loss: {avg_loss}, auc: {avg_auc:.4f}, time: {T}(s), valid (NDCG@10: {ndcg:.4f}, HR@10: {hr:.4f})')
 
             # Early stopping logic
             if ndcg > best_ndcg:
@@ -178,10 +191,10 @@ def train_model(model, dataset, args, device):
                 torch.save(model.state_dict(), f"{args.train_dir}/best_model.pt")
             else:
                 epochs_no_improve += 1
-                print(f"No improvement in NDCG for {epochs_no_improve} evals.")
+                logging.info(f"No improvement in NDCG for {epochs_no_improve} evals.")
 
             if epochs_no_improve >= args.patience:
-                print(f"Early stopping triggered at epoch {epoch}. Best NDCG: {best_ndcg:.4f}")
+                logging.info(f"Early stopping triggered at epoch {epoch}. Best NDCG: {best_ndcg:.4f}")
                 break
 
         if args.log_metrics:
@@ -191,13 +204,14 @@ def train_model(model, dataset, args, device):
 
         t0 = time.time()
 
-    print("Done")
+    logging.info("Done")
 
 def main():
     args = parse_args()
     if not os.path.exists(args.train_dir):
         os.makedirs(args.train_dir)
-    print(f"Arguments: {args}")
+    setup_logging(args.log_to_file, args.train_dir)
+    logging.info(f"Arguments: {args}")
 
     device = get_device()
 
@@ -208,12 +222,20 @@ def main():
 
     final_model_path = f"{args.train_dir}/model.pt"
     torch.save(model.state_dict(), final_model_path)
-    print(f"Final model saved at {final_model_path}")
+    logging.info(f"Final model saved at {final_model_path}")
+
+    # Load the best model for testing
+    best_model_path = f"{args.train_dir}/best_model.pt"
+    if os.path.exists(best_model_path):
+        model.load_state_dict(torch.load(best_model_path, map_location=device))
+        logging.info(f"Loaded best model from {best_model_path} for testing")
+    else:
+        logging.warning("Best model not found, using final model for testing")
 
     test_dataset = EvalDataset(dataset[2], dataset[0], dataset[3], itemnum, args.maxlen, args.context_size)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=2, pin_memory=True)
     ndcg, hr = evaluate_test_loader(model, test_loader, device)
-    print(f"Test NDCG@10: {ndcg:.4f}, HR@10: {hr:.4f}")
+    logging.info(f"Test NDCG@10: {ndcg:.4f}, HR@10: {hr:.4f}")
 
 if __name__ == '__main__':
     main()
