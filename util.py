@@ -51,7 +51,7 @@ def load_checkpoint(model, optimizer, scheduler, resume_path):
     epochs_no_improve = checkpoint.get('epochs_no_improve', 0)
     return epoch, best_ndcg, epochs_no_improve
 
-def create_standard_split(User, user_last_indx=None, min_interactions=3):
+def create_standard_split(User, user_last_indx=None, min_interactions=5):
     """
     Create standard train/valid/test split using leave-one-out protocol.
     
@@ -66,15 +66,12 @@ def create_standard_split(User, user_last_indx=None, min_interactions=3):
     user_train = {}
     user_valid = {}
     user_test = {}
-    
+
     for user in User:
         nfeedback = len(User[user])
         
         if nfeedback < min_interactions:
-            # Not enough interactions for proper split
-            user_train[user] = User[user]
-            user_valid[user] = []
-            user_test[user] = []
+            continue
         else:
             # Standard leave-one-out protocol
             user_train[user] = User[user][:-2]  # All except last 2
